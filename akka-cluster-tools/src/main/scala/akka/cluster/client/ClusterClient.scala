@@ -55,7 +55,9 @@ object ClusterClientSettings {
     new ClusterClientSettings(
       initialContacts,
       establishingGetContactsInterval = config.getDuration("establishing-get-contacts-interval", MILLISECONDS).millis,
-      refreshContactsInterval = config.getDuration("refresh-contacts-interval", MILLISECONDS).millis)
+      refreshContactsInterval = config.getDuration("refresh-contacts-interval", MILLISECONDS).millis,
+      heartbeatInterval = config.getDuration("heartbeat-interval", MILLISECONDS).millis,
+      acceptableHeartbeatPause = config.getDuration("acceptable-heartbeat-pause", MILLISECONDS).millis)
   }
 
   /**
@@ -79,11 +81,17 @@ object ClusterClientSettings {
  *   to establish contact with one of ClusterReceptionist on the servers (cluster nodes)
  * @param refreshContactsInterval Interval at which the client will ask the
  *   `ClusterReceptionist` for new contact points to be used for next reconnect.
+ * @param heartbeatInterval How often failure detection heartbeat messages for detection
+ *   of failed connections should be sent.
+ * @param acceptableHeartbeatPause Number of potentially lost/delayed heartbeats that will
+ *   be accepted before considering it to be an anomaly.
  */
 final class ClusterClientSettings(
   val initialContacts: Set[ActorPath],
   val establishingGetContactsInterval: FiniteDuration,
-  val refreshContactsInterval: FiniteDuration) extends NoSerializationVerificationNeeded {
+  val refreshContactsInterval: FiniteDuration,
+  val heartbeatInterval: FiniteDuration,
+  val acceptableHeartbeatPause: FiniteDuration) extends NoSerializationVerificationNeeded {
 
   def withInitialContacts(initialContacts: Set[ActorPath]): ClusterClientSettings = {
     require(initialContacts.nonEmpty, "initialContacts must be defined")
@@ -96,11 +104,17 @@ final class ClusterClientSettings(
   def withRefreshContactsInterval(refreshContactsInterval: FiniteDuration): ClusterClientSettings =
     copy(refreshContactsInterval = refreshContactsInterval)
 
+  def withHeartbeat(heartbeatInterval: FiniteDuration, acceptableHeartbeatPause: FiniteDuration): ClusterClientSettings =
+    copy(heartbeatInterval = heartbeatInterval, acceptableHeartbeatPause = acceptableHeartbeatPause)
+
   private def copy(
     initialContacts: Set[ActorPath] = initialContacts,
     establishingGetContactsInterval: FiniteDuration = establishingGetContactsInterval,
-    refreshContactsInterval: FiniteDuration = refreshContactsInterval): ClusterClientSettings =
-    new ClusterClientSettings(initialContacts, establishingGetContactsInterval, refreshContactsInterval)
+    refreshContactsInterval: FiniteDuration = refreshContactsInterval,
+    heartbeatInterval: FiniteDuration = heartbeatInterval,
+    acceptableHeartbeatPause: FiniteDuration = acceptableHeartbeatPause): ClusterClientSettings =
+    new ClusterClientSettings(initialContacts, establishingGetContactsInterval, refreshContactsInterval,
+      heartbeatInterval, acceptableHeartbeatPause)
 
 }
 
@@ -129,6 +143,7 @@ object ClusterClient {
    */
   private[akka] object Internal {
     case object RefreshContactsTick
+    case object HeartbeatTick
   }
 }
 
@@ -174,12 +189,17 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
 
   require(initialContacts.nonEmpty, "initialContacts must be defined")
 
+  val acceptableHeartbeatPauseNanos: Long = acceptableHeartbeatPause.toNanos
+  var heartbeatTimestamp: Long = System.nanoTime()
+
   val initialContactsSel: immutable.IndexedSeq[ActorSelection] =
     initialContacts.map(context.actorSelection).toVector
   var contacts = initialContactsSel
   sendGetContacts()
 
   import context.dispatcher
+  val heartbeatTask = context.system.scheduler.schedule(
+    heartbeatInterval, heartbeatInterval, self, HeartbeatTick)
   var refreshContactsTask: Option[Cancellable] = None
   scheduleRefreshContactsTick(establishingGetContactsInterval)
   self ! RefreshContactsTick
@@ -192,6 +212,7 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
 
   override def postStop(): Unit = {
     super.postStop()
+    heartbeatTask.cancel()
     refreshContactsTask foreach { _.cancel() }
   }
 
@@ -204,15 +225,15 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
         contacts foreach { _ ! Identify(None) }
       }
     case ActorIdentity(_, Some(receptionist)) ⇒
-      context watch receptionist
       log.info("Connected to [{}]", receptionist.path)
-      context.watch(receptionist)
       scheduleRefreshContactsTick(refreshContactsInterval)
       unstashAll()
       context.become(active(receptionist))
     case ActorIdentity(_, None) ⇒ // ok, use another instead
-    case RefreshContactsTick    ⇒ sendGetContacts()
-    case msg                    ⇒ stash()
+    case HeartbeatTick ⇒
+      heartbeatTimestamp = System.nanoTime()
+    case RefreshContactsTick ⇒ sendGetContacts()
+    case msg                 ⇒ stash()
   }
 
   def active(receptionist: ActorRef): Actor.Receive = {
@@ -222,17 +243,22 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
       receptionist forward DistributedPubSubMediator.SendToAll(path, msg)
     case Publish(topic, msg) ⇒
       receptionist forward DistributedPubSubMediator.Publish(topic, msg)
+    case HeartbeatTick ⇒
+      if (System.nanoTime() - heartbeatTimestamp > acceptableHeartbeatPauseNanos) {
+        log.info("Lost contact with [{}], restablishing connection", receptionist)
+        sendGetContacts()
+        scheduleRefreshContactsTick(establishingGetContactsInterval)
+        context.become(establishing)
+      } else
+        receptionist ! Heartbeat
+    case HeartbeatRsp ⇒
+      heartbeatTimestamp = System.nanoTime()
     case RefreshContactsTick ⇒
       receptionist ! GetContacts
     case Contacts(contactPoints) ⇒
       // refresh of contacts
       if (contactPoints.nonEmpty)
         contacts = contactPoints
-    case Terminated(`receptionist`) ⇒
-      log.info("Lost contact with [{}], restablishing connection", receptionist)
-      sendGetContacts()
-      scheduleRefreshContactsTick(establishingGetContactsInterval)
-      context.become(establishing)
     case _: ActorIdentity ⇒ // ok, from previous establish, already handled
   }
 
@@ -409,6 +435,10 @@ object ClusterReceptionist {
     @SerialVersionUID(1L)
     final case class Contacts(contactPoints: immutable.IndexedSeq[ActorSelection])
     @SerialVersionUID(1L)
+    case object Heartbeat
+    @SerialVersionUID(1L)
+    case object HeartbeatRsp
+    @SerialVersionUID(1L)
     case object Ping
 
     /**
@@ -417,12 +447,10 @@ object ClusterReceptionist {
      */
     class ClientResponseTunnel(client: ActorRef, timeout: FiniteDuration) extends Actor {
       context.setReceiveTimeout(timeout)
-      context.watch(client)
       def receive = {
-        case Ping                 ⇒ // keep alive from client
-        case ReceiveTimeout       ⇒ context stop self
-        case Terminated(`client`) ⇒ context stop self
-        case msg                  ⇒ client forward msg
+        case Ping           ⇒ // keep alive from client
+        case ReceiveTimeout ⇒ context stop self
+        case msg            ⇒ client forward msg
       }
     }
   }
@@ -507,6 +535,9 @@ class ClusterReceptionist(pubSubMediator: ActorRef, settings: ClusterReceptionis
       val tunnel = responseTunnel(sender())
       tunnel ! Ping // keep alive
       pubSubMediator.tell(msg, tunnel)
+
+    case Heartbeat ⇒
+      sender() ! HeartbeatRsp
 
     case GetContacts ⇒
       // Consistent hashing is used to ensure that the reply to GetContacts
