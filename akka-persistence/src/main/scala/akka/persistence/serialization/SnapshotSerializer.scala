@@ -33,6 +33,8 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
 
   override val includeManifest: Boolean = false
 
+  private lazy val serialization = SerializationExtension(system)
+
   private lazy val transportInformation: Option[Serialization.Information] = {
     val address = system.provider.getDefaultAddress
     if (address.hasLocalScope) None
@@ -57,14 +59,21 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
 
   private def snapshotToBinary(snapshot: AnyRef): Array[Byte] = {
     def serialize() = {
-      val extension = SerializationExtension(system)
-
-      val snapshotSerializer = extension.findSerializerFor(snapshot)
+      val snapshotSerializer = serialization.findSerializerFor(snapshot)
 
       val headerOut = new ByteArrayOutputStream
       writeInt(headerOut, snapshotSerializer.identifier)
-      if (snapshotSerializer.includeManifest)
-        headerOut.write(snapshot.getClass.getName.getBytes("utf-8"))
+
+      snapshotSerializer match {
+        case ser2: SerializerWithStringManifest ⇒
+          val manifest = ser2.manifest(snapshot)
+          if (manifest != null && manifest != "")
+            headerOut.write(manifest.getBytes("utf-8"))
+        case _ ⇒
+          if (snapshotSerializer.includeManifest)
+            headerOut.write(snapshot.getClass.getName.getBytes("utf-8"))
+      }
+
       val headerBytes = headerOut.toByteArray
 
       val out = new ByteArrayOutputStream
@@ -84,8 +93,6 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
   }
 
   private def snapshotFromBinary(bytes: Array[Byte]): AnyRef = {
-    val extension = SerializationExtension(system)
-
     val in = new ByteArrayInputStream(bytes)
     val headerLength = readInt(in)
     val headerBytes = bytes.slice(4, headerLength + 4)
@@ -122,7 +129,7 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
     val oldHeader =
       if (readShort(in) == 0xedac) { // Java Serialization magic value with swapped bytes
         val b = if (SnapshotSerializer.doPatch) patch(headerBytes) else headerBytes
-        extension.deserialize(b, classOf[SnapshotHeader]).toOption
+        serialization.deserialize(b, classOf[SnapshotHeader]).toOption
       } else None
 
     val header = oldHeader.getOrElse {
@@ -138,9 +145,8 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
         }
       SnapshotHeader(serializerId, manifest)
     }
-    val manifest = header.manifest.map(system.dynamicAccess.getClassFor[AnyRef](_).get)
 
-    extension.deserialize[AnyRef](snapshotBytes, header.serializerId, manifest).get
+    serialization.deserialize[AnyRef](snapshotBytes, header.serializerId, header.manifest.getOrElse("")).get
   }
 
   private def writeInt(outputStream: OutputStream, i: Int) =
