@@ -32,6 +32,8 @@ object ClusterClientSpec extends MultiNodeConfig {
     akka.actor.provider = "akka.cluster.ClusterActorRefProvider"
     akka.remote.log-remote-lifecycle-events = off
     akka.cluster.auto-down-unreachable-after = 0s
+    akka.cluster.client.heartbeat-interval = 1s
+    akka.cluster.client.acceptable-heartbeat-pause = 3s
     """))
 
   testTransport(on = true)
@@ -191,9 +193,11 @@ class ClusterClientSpec extends MultiNodeSpec(ClusterClientSpec) with STMultiNod
         }
         testConductor.exit(receptionistRoleName, 0).await
         remainingServerRoleNames -= receptionistRoleName
-        awaitAssert {
-          c ! ClusterClient.Send("/user/service2", "hi again", localAffinity = true)
-          expectMsg(1 second, "hi again-ack")
+        within(remaining - 3.seconds) {
+          awaitAssert {
+            c ! ClusterClient.Send("/user/service2", "hi again", localAffinity = true)
+            expectMsg(1 second, "hi again-ack")
+          }
         }
         system.stop(c)
       }

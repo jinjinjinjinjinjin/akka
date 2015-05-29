@@ -36,6 +36,7 @@ import akka.routing.ConsistentHash
 import akka.routing.MurmurHash
 import com.typesafe.config.Config
 import akka.actor.DeadLetterSuppression
+import akka.remote.DeadlineFailureDetector
 
 object ClusterClientSettings {
   /**
@@ -83,7 +84,9 @@ object ClusterClientSettings {
  * @param heartbeatInterval How often failure detection heartbeat messages for detection
  *   of failed connections should be sent.
  * @param acceptableHeartbeatPause Number of potentially lost/delayed heartbeats that will
- *   be accepted before considering it to be an anomaly.
+ *   be accepted before considering it to be an anomaly. The ClusterClient is using the
+ *   [[akka.remote.DeadlineFailureDetector]], which will trigger if there are no heartbeats
+ *   within the duration `heartbeatInterval + acceptableHeartbeatPause`.
  */
 final class ClusterClientSettings(
     val initialContacts: Set[ActorPath],
@@ -188,8 +191,8 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
 
   require(initialContacts.nonEmpty, "initialContacts must be defined")
 
-  val acceptableHeartbeatPauseNanos: Long = acceptableHeartbeatPause.toNanos
-  var heartbeatTimestamp: Long = System.nanoTime()
+  // FIXME use new constructor of DeadlineFailureDetector with heartbeatInterval
+  val failureDetector = new DeadlineFailureDetector(acceptableHeartbeatPause)
 
   val initialContactsSel: immutable.IndexedSeq[ActorSelection] =
     initialContacts.map(context.actorSelection).toVector
@@ -228,9 +231,10 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
       scheduleRefreshContactsTick(refreshContactsInterval)
       unstashAll()
       context.become(active(receptionist))
+      failureDetector.heartbeat()
     case ActorIdentity(_, None) ⇒ // ok, use another instead
     case HeartbeatTick ⇒
-      heartbeatTimestamp = System.nanoTime()
+      failureDetector.heartbeat()
     case RefreshContactsTick ⇒ sendGetContacts()
     case msg                 ⇒ stash()
   }
@@ -243,15 +247,16 @@ class ClusterClient(settings: ClusterClientSettings) extends Actor with Stash wi
     case Publish(topic, msg) ⇒
       receptionist forward DistributedPubSubMediator.Publish(topic, msg)
     case HeartbeatTick ⇒
-      if (System.nanoTime() - heartbeatTimestamp > acceptableHeartbeatPauseNanos) {
+      if (!failureDetector.isAvailable) {
         log.info("Lost contact with [{}], restablishing connection", receptionist)
         sendGetContacts()
         scheduleRefreshContactsTick(establishingGetContactsInterval)
         context.become(establishing)
+        failureDetector.heartbeat()
       } else
         receptionist ! Heartbeat
     case HeartbeatRsp ⇒
-      heartbeatTimestamp = System.nanoTime()
+      failureDetector.heartbeat()
     case RefreshContactsTick ⇒
       receptionist ! GetContacts
     case Contacts(contactPoints) ⇒
