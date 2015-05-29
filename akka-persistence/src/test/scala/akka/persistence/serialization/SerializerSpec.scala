@@ -10,12 +10,14 @@ import akka.actor._
 import akka.persistence._
 import akka.serialization._
 import akka.testkit._
-
 import akka.persistence.AtLeastOnceDelivery.AtLeastOnceDeliverySnapshot
 import akka.persistence.AtLeastOnceDelivery.UnconfirmedDelivery
+import akka.util.ByteString.UTF_8
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import org.apache.commons.codec.binary.Hex.decodeHex
+
+import SerializerSpecConfigs._
 
 object SerializerSpecConfigs {
   val customSerializers = ConfigFactory.parseString(
@@ -61,6 +63,7 @@ object SerializerSpecConfigs {
 
   def config(configs: String*): Config =
     configs.foldLeft(ConfigFactory.empty)((r, c) ⇒ r.withFallback(ConfigFactory.parseString(c)))
+
 }
 
 import SerializerSpecConfigs._
@@ -91,7 +94,7 @@ class SnapshotSerializerPersistenceSpec extends AkkaSpec(customSerializers) {
 
     "be able to read snapshot created with akka 2.3.6 and Scala 2.10" in {
       val dataStr = "abc"
-      val snapshot = Snapshot(dataStr.getBytes("utf-8"))
+      val snapshot = Snapshot(dataStr.getBytes(UTF_8))
       val serializer = serialization.findSerializerFor(snapshot)
 
       // the oldSnapshot was created with Akka 2.3.6 and it is using JavaSerialization
@@ -109,13 +112,13 @@ class SnapshotSerializerPersistenceSpec extends AkkaSpec(customSerializers) {
       val bytes = decodeHex(oldSnapshot.toCharArray)
       val deserialized = serializer.fromBinary(bytes, None).asInstanceOf[Snapshot]
 
-      val deserializedDataStr = new String(deserialized.data.asInstanceOf[Array[Byte]], "utf-8")
+      val deserializedDataStr = new String(deserialized.data.asInstanceOf[Array[Byte]], UTF_8)
       dataStr should ===(deserializedDataStr)
     }
 
     "be able to read snapshot created with akka 2.3.6 and Scala 2.11" in {
       val dataStr = "abc"
-      val snapshot = Snapshot(dataStr.getBytes("utf-8"))
+      val snapshot = Snapshot(dataStr.getBytes(UTF_8))
       val serializer = serialization.findSerializerFor(snapshot)
 
       // the oldSnapshot was created with Akka 2.3.6 and it is using JavaSerialization
@@ -133,7 +136,7 @@ class SnapshotSerializerPersistenceSpec extends AkkaSpec(customSerializers) {
       val bytes = decodeHex(oldSnapshot.toCharArray)
       val deserialized = serializer.fromBinary(bytes, None).asInstanceOf[Snapshot]
 
-      val deserializedDataStr = new String(deserialized.data.asInstanceOf[Array[Byte]], "utf-8")
+      val deserializedDataStr = new String(deserialized.data.asInstanceOf[Array[Byte]], UTF_8)
       dataStr should ===(deserializedDataStr)
     }
   }
@@ -306,11 +309,11 @@ class MyPayloadSerializer extends Serializer {
   def includeManifest: Boolean = true
 
   def toBinary(o: AnyRef): Array[Byte] = o match {
-    case MyPayload(data) ⇒ s".${data}".getBytes("UTF-8")
+    case MyPayload(data) ⇒ s".${data}".getBytes(UTF_8)
   }
 
   def fromBinary(bytes: Array[Byte], manifest: Option[Class[_]]): AnyRef = manifest match {
-    case Some(MyPayloadClass) ⇒ MyPayload(s"${new String(bytes, "UTF-8")}.")
+    case Some(MyPayloadClass) ⇒ MyPayload(s"${new String(bytes, UTF_8)}.")
     case Some(c)              ⇒ throw new Exception(s"unexpected manifest ${c}")
     case None                 ⇒ throw new Exception("no manifest")
   }
@@ -327,15 +330,15 @@ class MyPayload2Serializer extends SerializerWithStringManifest {
   def manifest(o: AnyRef): String = ManifestV2
 
   def toBinary(o: AnyRef): Array[Byte] = o match {
-    case MyPayload2(data, n) ⇒ s".$data:$n".getBytes("UTF-8")
+    case MyPayload2(data, n) ⇒ s".$data:$n".getBytes(UTF_8)
   }
 
   def fromBinary(bytes: Array[Byte], manifest: String): AnyRef = manifest match {
     case ManifestV2 ⇒
-      val parts = new String(bytes, "UTF-8").split(":")
+      val parts = new String(bytes, UTF_8).split(":")
       MyPayload2(data = parts(0) + ".", n = parts(1).toInt)
     case ManifestV1 ⇒
-      MyPayload2(data = s"${new String(bytes, "UTF-8")}.", n = 0)
+      MyPayload2(data = s"${new String(bytes, UTF_8)}.", n = 0)
     case other ⇒
       throw new Exception(s"unexpected manifest [$other]")
   }
@@ -348,11 +351,11 @@ class MySnapshotSerializer extends Serializer {
   def includeManifest: Boolean = true
 
   def toBinary(o: AnyRef): Array[Byte] = o match {
-    case MySnapshot(data) ⇒ s".${data}".getBytes("UTF-8")
+    case MySnapshot(data) ⇒ s".${data}".getBytes(UTF_8)
   }
 
   def fromBinary(bytes: Array[Byte], manifest: Option[Class[_]]): AnyRef = manifest match {
-    case Some(MySnapshotClass) ⇒ MySnapshot(s"${new String(bytes, "UTF-8")}.")
+    case Some(MySnapshotClass) ⇒ MySnapshot(s"${new String(bytes, UTF_8)}.")
     case Some(c)               ⇒ throw new Exception(s"unexpected manifest ${c}")
     case None                  ⇒ throw new Exception("no manifest")
   }
@@ -367,12 +370,12 @@ class MySnapshotSerializer2 extends SerializerWithStringManifest {
   def manifest(o: AnyRef): String = CurrentManifest
 
   def toBinary(o: AnyRef): Array[Byte] = o match {
-    case MySnapshot2(data) ⇒ s".${data}".getBytes("UTF-8")
+    case MySnapshot2(data) ⇒ s".${data}".getBytes(UTF_8)
   }
 
   def fromBinary(bytes: Array[Byte], manifest: String): AnyRef = manifest match {
     case CurrentManifest | OldManifest ⇒
-      MySnapshot2(s"${new String(bytes, "UTF-8")}.")
+      MySnapshot2(s"${new String(bytes, UTF_8)}.")
     case other ⇒
       throw new Exception(s"unexpected manifest [$other]")
   }
@@ -387,15 +390,15 @@ class OldPayloadSerializer extends SerializerWithStringManifest {
   def manifest(o: AnyRef): String = o.getClass.getName
 
   def toBinary(o: AnyRef): Array[Byte] = o match {
-    case MyPayload(data) ⇒ s".${data}".getBytes("UTF-8")
+    case MyPayload(data) ⇒ s".${data}".getBytes(UTF_8)
     case old if old.getClass.getName == OldPayloadClassName ⇒
-      o.toString.getBytes("UTF-8")
+      o.toString.getBytes(UTF_8)
   }
 
   def fromBinary(bytes: Array[Byte], manifest: String): AnyRef = manifest match {
     case OldPayloadClassName ⇒
-      MyPayload(new String(bytes, "UTF-8"))
-    case MyPayloadClassName ⇒ MyPayload(s"${new String(bytes, "UTF-8")}.")
+      MyPayload(new String(bytes, UTF_8))
+    case MyPayloadClassName ⇒ MyPayload(s"${new String(bytes, UTF_8)}.")
     case other ⇒
       throw new Exception(s"unexpected manifest [$other]")
   }

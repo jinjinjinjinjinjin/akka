@@ -115,7 +115,7 @@ class MessageSerializer(val system: ExtendedActorSystem) extends BaseSerializer 
       serializer match {
         case ser2: SerializerWithStringManifest ⇒
           val manifest = ser2.manifest(payload)
-          if (manifest != null && manifest != "")
+          if (manifest != "")
             builder.setPayloadManifest(ByteString.copyFromUtf8(manifest))
         case _ ⇒
           if (serializer.includeManifest)

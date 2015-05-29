@@ -92,7 +92,7 @@ class Serialization(val system: ExtendedActorSystem) extends Extension {
 
   /**
    * Deserializes the given array of bytes using the specified serializer id,
-   * using the optional type hint to the Serializer and the optional ClassLoader ot load it into.
+   * using the optional type hint to the Serializer.
    * Returns either the resulting object or an Exception if one was thrown.
    */
   def deserialize[T](bytes: Array[Byte], serializerId: Int, clazz: Option[Class[_ <: T]]): Try[T] =
@@ -107,10 +107,10 @@ class Serialization(val system: ExtendedActorSystem) extends Extension {
 
   /**
    * Deserializes the given array of bytes using the specified serializer id,
-   * using the optional type hint to the Serializer and the optional ClassLoader ot load it into.
+   * using the optional type hint to the Serializer.
    * Returns either the resulting object or an Exception if one was thrown.
    */
-  def deserialize[T](bytes: Array[Byte], serializerId: Int, manifest: String): Try[T] =
+  def deserialize(bytes: Array[Byte], serializerId: Int, manifest: String): Try[AnyRef] =
     Try {
       val serializer = try serializerByIdentity(serializerId) catch {
         case _: NoSuchElementException ⇒ throw new NotSerializableException(
@@ -118,16 +118,18 @@ class Serialization(val system: ExtendedActorSystem) extends Extension {
             "akka.actor.serializers is not in synch between the two systems.")
       }
       serializer match {
-        case s2: SerializerWithStringManifest ⇒ s2.fromBinary(bytes, manifest).asInstanceOf[T]
-        case s1 if manifest == "" || (manifest eq null) ⇒
-          s1.fromBinary(bytes, None).asInstanceOf[T]
+        case s2: SerializerWithStringManifest ⇒ s2.fromBinary(bytes, manifest)
         case s1 ⇒
-          system.dynamicAccess.getClassFor[AnyRef](manifest) match {
-            case Success(classManifest) ⇒
-              s1.fromBinary(bytes, Some(classManifest)).asInstanceOf[T]
-            case Failure(e) ⇒
-              throw new NotSerializableException(
-                s"Cannot find manifest class [$manifest] for serializer with id [$serializerId].")
+          if (manifest == "")
+            s1.fromBinary(bytes, None)
+          else {
+            system.dynamicAccess.getClassFor[AnyRef](manifest) match {
+              case Success(classManifest) ⇒
+                s1.fromBinary(bytes, Some(classManifest))
+              case Failure(e) ⇒
+                throw new NotSerializableException(
+                  s"Cannot find manifest class [$manifest] for serializer with id [$serializerId].")
+            }
           }
       }
     }

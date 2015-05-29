@@ -8,6 +8,7 @@ package akka.persistence.serialization
 import java.io._
 import akka.actor._
 import akka.serialization._
+import akka.util.ByteString.UTF_8
 import scala.util.Success
 import scala.util.Failure
 
@@ -67,11 +68,11 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
       snapshotSerializer match {
         case ser2: SerializerWithStringManifest ⇒
           val manifest = ser2.manifest(snapshot)
-          if (manifest != null && manifest != "")
-            headerOut.write(manifest.getBytes("utf-8"))
+          if (manifest != "")
+            headerOut.write(manifest.getBytes(UTF_8))
         case _ ⇒
           if (snapshotSerializer.includeManifest)
-            headerOut.write(snapshot.getClass.getName.getBytes("utf-8"))
+            headerOut.write(snapshot.getClass.getName.getBytes(UTF_8))
       }
 
       val headerBytes = headerOut.toByteArray
@@ -141,12 +142,12 @@ class SnapshotSerializer(val system: ExtendedActorSystem) extends BaseSerializer
         else {
           val manifestBytes = Array.ofDim[Byte](remaining)
           headerIn.read(manifestBytes)
-          Some(new String(manifestBytes, "utf-8"))
+          Some(new String(manifestBytes, UTF_8))
         }
       SnapshotHeader(serializerId, manifest)
     }
 
-    serialization.deserialize[AnyRef](snapshotBytes, header.serializerId, header.manifest.getOrElse("")).get
+    serialization.deserialize(snapshotBytes, header.serializerId, header.manifest.getOrElse("")).get
   }
 
   private def writeInt(outputStream: OutputStream, i: Int) =

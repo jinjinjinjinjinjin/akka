@@ -39,7 +39,7 @@ private[akka] object MessageSerializer {
     serializer match {
       case ser2: SerializerWithStringManifest ⇒
         val manifest = ser2.manifest(message)
-        if (manifest != null && manifest != "")
+        if (manifest != "")
           builder.setMessageManifest(ByteString.copyFromUtf8(manifest))
       case _ ⇒
         if (serializer.includeManifest)
