@@ -4,10 +4,8 @@
 package akka.cluster.client
 
 import java.net.URLEncoder
-
 import scala.collection.immutable
 import scala.concurrent.duration._
-
 import akka.actor.Actor
 import akka.actor.ActorIdentity
 import akka.actor.ActorLogging
@@ -37,6 +35,7 @@ import akka.japi.Util.immutableSeq
 import akka.routing.ConsistentHash
 import akka.routing.MurmurHash
 import com.typesafe.config.Config
+import akka.actor.DeadLetterSuppression
 
 object ClusterClientSettings {
   /**
@@ -87,11 +86,11 @@ object ClusterClientSettings {
  *   be accepted before considering it to be an anomaly.
  */
 final class ClusterClientSettings(
-  val initialContacts: Set[ActorPath],
-  val establishingGetContactsInterval: FiniteDuration,
-  val refreshContactsInterval: FiniteDuration,
-  val heartbeatInterval: FiniteDuration,
-  val acceptableHeartbeatPause: FiniteDuration) extends NoSerializationVerificationNeeded {
+    val initialContacts: Set[ActorPath],
+    val establishingGetContactsInterval: FiniteDuration,
+    val refreshContactsInterval: FiniteDuration,
+    val heartbeatInterval: FiniteDuration,
+    val acceptableHeartbeatPause: FiniteDuration) extends NoSerializationVerificationNeeded {
 
   def withInitialContacts(initialContacts: Set[ActorPath]): ClusterClientSettings = {
     require(initialContacts.nonEmpty, "initialContacts must be defined")
@@ -394,9 +393,9 @@ object ClusterReceptionistSettings {
  *   client will be stopped after this time of inactivity.
  */
 final class ClusterReceptionistSettings(
-  val role: Option[String],
-  val numberOfContacts: Int,
-  val responseTunnelReceiveTimeout: FiniteDuration) extends NoSerializationVerificationNeeded {
+    val role: Option[String],
+    val numberOfContacts: Int,
+    val responseTunnelReceiveTimeout: FiniteDuration) extends NoSerializationVerificationNeeded {
 
   def withRole(role: String): ClusterReceptionistSettings = copy(role = ClusterReceptionistSettings.roleOption(role))
 
@@ -431,15 +430,15 @@ object ClusterReceptionist {
    */
   private[akka] object Internal {
     @SerialVersionUID(1L)
-    case object GetContacts
+    case object GetContacts extends DeadLetterSuppression
     @SerialVersionUID(1L)
     final case class Contacts(contactPoints: immutable.IndexedSeq[ActorSelection])
     @SerialVersionUID(1L)
-    case object Heartbeat
+    case object Heartbeat extends DeadLetterSuppression
     @SerialVersionUID(1L)
-    case object HeartbeatRsp
+    case object HeartbeatRsp extends DeadLetterSuppression
     @SerialVersionUID(1L)
-    case object Ping
+    case object Ping extends DeadLetterSuppression
 
     /**
      * Replies are tunneled via this actor, child of the receptionist, to avoid
@@ -478,7 +477,7 @@ object ClusterReceptionist {
  * directly to the actor in the cluster.
  */
 class ClusterReceptionist(pubSubMediator: ActorRef, settings: ClusterReceptionistSettings)
-  extends Actor with ActorLogging {
+    extends Actor with ActorLogging {
 
   import DistributedPubSubMediator.{ Send, SendToAll, Publish }
 
