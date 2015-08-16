@@ -1,4 +1,4 @@
-# Akka
+## Akka
 
 We believe that writing correct concurrent & distributed, resilient and elastic applications is too hard. Most of the time it's because we are using the wrong tools and the wrong level of abstraction.
 
